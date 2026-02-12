@@ -1,65 +1,97 @@
+/*
+   Based on Neil Kolban example for IDF: https://github.com/nkolban/esp32-snippets/blob/master/cpp_utils/tests/BLE%20Tests/SampleScan.cpp
+   Ported to Arduino ESP32 by Evandro Copercini
+*/
+
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
+#include <NimBLEDevice.h>
+#include <NimBLEAdvertisedDevice.h>
+#include "NimBLEEddystoneTLM.h"
+#include "NimBLEBeacon.h"
 
-int scanTime = 5; //In seconds
-BLEScan* pBLEScan;
+#define ENDIAN_CHANGE_U16(x) ((((x) & 0xFF00) >> 8) + (((x) & 0xFF) << 8))
 
-// Counters and Timers
-//#define CHANGEDELY 15*1000  // 15 second Delay
-#define CHANGEDELY 5*1000   // 5 second Delay
+int         scanTime = 5 * 1000; // In milliseconds
+NimBLEScan* pBLEScan;
 
-// Location IDs (in Int)
-#define NOBEACON      0
-#define MARKETPLACE   1
-#define DROIDDEPOT    2
-#define RESISTANCE    3
-#define UNKNOWN       4
-#define ALERT         5
-#define DOKONDARS     6
-#define FIRSTORDER    7
+class ScanCallbacks : public NimBLEScanCallbacks {
+    void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
+        if (advertisedDevice->haveName()) {
+            Serial.print("Device name: ");
+            Serial.println(advertisedDevice->getName().c_str());
+            Serial.println("");
+        }
 
-// Filters
-#define RSSI -75
-#define BLE_DISNEY 0x0183
-const String IGNOREHOST = "SITH-TLBX";
+        if (advertisedDevice->haveServiceUUID()) {
+            NimBLEUUID devUUID = advertisedDevice->getServiceUUID();
+            Serial.print("Found ServiceUUID: ");
+            Serial.println(devUUID.toString().c_str());
+            Serial.println("");
+        } else if (advertisedDevice->haveManufacturerData() == true) {
+            std::string strManufacturerData = advertisedDevice->getManufacturerData();
+            if (strManufacturerData.length() == 25 && strManufacturerData[0] == 0x4C && strManufacturerData[1] == 0x00) {
+                Serial.println("Found an iBeacon!");
+                NimBLEBeacon oBeacon = NimBLEBeacon();
+                oBeacon.setData(reinterpret_cast<const uint8_t*>(strManufacturerData.data()), strManufacturerData.length());
+                Serial.printf("iBeacon Frame\n");
+                Serial.printf("ID: %04X Major: %d Minor: %d UUID: %s Power: %d\n",
+                              oBeacon.getManufacturerId(),
+                              ENDIAN_CHANGE_U16(oBeacon.getMajor()),
+                              ENDIAN_CHANGE_U16(oBeacon.getMinor()),
+                              oBeacon.getProximityUUID().toString().c_str(),
+                              oBeacon.getSignalPower());
+            } else {
+                Serial.println("Found another manufacturers beacon!");
+                Serial.printf("strManufacturerData: %d ", strManufacturerData.length());
+                for (int i = 0; i < strManufacturerData.length(); i++) {
+                    Serial.printf("[%X]", strManufacturerData[i]);
+                }
+                Serial.printf("\n");
+            }
+            return;
+        }
 
-// Timing
-uint32_t last_activity;
+        NimBLEUUID eddyUUID = (uint16_t)0xfeaa;
 
-// Scan Values to store
-int8_t scan_rssi;
-uint16_t area_num = 0, last_area_num = 9;
-String beacon_name = "";
+        if (advertisedDevice->getServiceUUID().equals(eddyUUID)) {
+            std::string serviceData = advertisedDevice->getServiceData(eddyUUID);
+            if (serviceData[0] == 0x20) {
+                Serial.println("Found an EddystoneTLM beacon!");
+                NimBLEEddystoneTLM foundEddyTLM = NimBLEEddystoneTLM();
+                foundEddyTLM.setData(reinterpret_cast<const uint8_t*>(serviceData.data()), serviceData.length());
 
-class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
-    void onResult(BLEAdvertisedDevice advertisedDevice) {
-      Serial.printf("Advertised Device: %s \n", advertisedDevice.toString().c_str());
+                Serial.printf("Reported battery voltage: %dmV\n", foundEddyTLM.getVolt());
+                Serial.printf("Reported temperature from TLM class: %.2fC\n", (double)foundEddyTLM.getTemp());
+                int   temp     = (int)serviceData[5] + (int)(serviceData[4] << 8);
+                float calcTemp = temp / 256.0f;
+                Serial.printf("Reported temperature from data: %.2fC\n", calcTemp);
+                Serial.printf("Reported advertise count: %d\n", foundEddyTLM.getCount());
+                Serial.printf("Reported time since last reboot: %ds\n", foundEddyTLM.getTime());
+                Serial.println("\n");
+                Serial.print(foundEddyTLM.toString().c_str());
+                Serial.println("\n");
+            }
+        }
     }
-};
+} scanCallbacks;
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("SWGE_Beacon_Scan");
-  Serial.println("Scanning...");
-  Serial.println("----------------\n");
+    Serial.begin(115200);
+    Serial.println("Scanning...");
 
-  BLEDevice::init("");
-  pBLEScan = BLEDevice::getScan(); //create new scan
-  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-  pBLEScan->setActiveScan(true); //active scan uses more power, but get results faster
-  pBLEScan->setInterval(100);
-  pBLEScan->setWindow(99);  // less or equal setInterval value
+    NimBLEDevice::init("Beacon-scanner");
+    pBLEScan = BLEDevice::getScan();
+    pBLEScan->setScanCallbacks(&scanCallbacks);
+    pBLEScan->setActiveScan(true);
+    pBLEScan->setInterval(100);
+    pBLEScan->setWindow(100);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
-  Serial.print("Devices found: ");
-  Serial.println(foundDevices.getCount());
-  Serial.println("Scan done!");
-  pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
-  delay(10000);
+    NimBLEScanResults foundDevices = pBLEScan->getResults(scanTime, false);
+    Serial.print("Devices found: ");
+    Serial.println(foundDevices.getCount());
+    Serial.println("Scan done!");
+    pBLEScan->clearResults(); // delete results scan buffer to release memory
+    delay(2000);
 }

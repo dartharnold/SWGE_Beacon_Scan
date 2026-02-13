@@ -16,6 +16,11 @@ NimBLEScan* pBLEScan;
 
 class ScanCallbacks : public NimBLEScanCallbacks {
     void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
+        int rssi = advertisedDevice->getRSSI();
+        if (rssi < RSSI) return;
+
+        
+        
         if (advertisedDevice->haveName()) {
             Serial.print("Device name: ");
             Serial.println(advertisedDevice->getName().c_str());

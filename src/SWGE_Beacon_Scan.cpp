@@ -27,16 +27,7 @@ const char* DEVNAME = "SWGESCAN";
 #define DOKONDARS    6
 #define FIRSTORDER   7
 
-const char* strLocation[8] = {
-  "No Beacon",
-  "Marketplace",
-  "Droid Depot",
-  "Resistance",
-  "Unknown",
-  "Alert",
-  "Dokondars",
-  "First Order"
-};
+const char* strLocation[8] = {"No Beacon","Marketplace","Droid Depot","Resistance","Unknown","Alert","Dok Ondars","First Order"};
 
 // ----------------------- Filters -----------------------
 #define RSSI           -75                // Minimum RSSI to consider   
